@@ -1,0 +1,390 @@
+
+
+WITH		SVC_HCPC (ID, REFERRAL_TYPE, REVIEW_TYPE, RANK_ID, SVC_CD,
+		HCPC, SVCREQDT, PROVNAMES, HCPC_CODES) AS (
+SELECT	
+ACTVTY_ID, REFERRAL_TYPE, REVIEW_TYPE, RNK_ID, SVC_CD,
+		PROC_CD, SVCREQDT, PROVNAMES, HCPC_CODES
+           FROM (
+SELECT	A.ACTVTY_ID,
+                        SREF.REF_URGENCY_DESC AS REFERRAL_TYPE,
+                        SREV.RVW_SCOPE_DESC AS REVIEW_TYPE,
+                        ROW_NUMBER ()
+                        OVER (PARTITION BY A.ACTVTY_ID
+                              ORDER BY H.PREAUTH_ID DESC)
+                           RNK_ID,
+                        SVC_CD,
+                        H.PROC_CD,
+                        S.SVC_REQ_DT SVCREQDT
+                     
+                   ,providernames.provnames
+				   ,providernames.HCPC_codes
+				   FROM  A
+
+                        INNER JOIN eiw_prd.SERVICE_WFMS S
+                           ON A.ACTVTY_ID = S.ACTVTY_ID
+                        INNER JOIN eiw_prd.PREAUTHORIZATION H
+                           ON S.SVC_ID = H.SVC_ID
+						    INNER join   
+							D  ---- to check the group by of providername has to be included
+                                providernames
+								on a.ACTVTY_ID = providernames.activityid
+                        LEFT OUTER JOIN eiw_prd.XPND_REF_URGENCY SREF
+                           ON H.REF_URGENCY_CD =
+                                 SREF.REF_URGENCY_CD
+                        LEFT OUTER JOIN eiw_prd.XPND_RVW_SCOPE SREV
+                           ON H.RVW_SCOPE_CD = SREV.RVW_SCOPE_CD
+                  
+                                    ) H
+          WHERE RNK_ID = 1),
+		 D (activityid, provnames, HCPC_codes) AS    (
+SELECT	activityid, provnames, HCPC_codes
+                                      FROM (  
+SELECT	activityid, 
+                                                    -- listagg (providername, ',') WITHIN GROUP (ORDER BY providername)  provnames
+													    regexp_replace(TRIM(TRAILING ',' 
+FROM	(rtrim(XMLAGG(TRIM(B.PROVIDERNAME)|| ',' 
+ORDER BY NULL) (VARCHAR(10000)), ','))),'([^,]+)(,\1)+', '\1',
+		1,0,'i') provnames,
+														regexp_replace(TRIM(TRAILING ',' 
+FROM	(rtrim(XMLAGG(TRIM(B.HCPC)|| ',' 
+ORDER BY SVC_REQ_TS) (VARCHAR(10000)), ','))),'([^,]+)(,\1)+',
+		'\1',1,0,'i') HCPC_codes
+                                                   FROM (
+SELECT	DISTINCT h.PROV_NM AS providername,
+                                                                        a.ACTVTY_ID AS activityid,
+																		H.PROC_CD AS HCPC,
+																		H.SVC_REQ_TS
+                                                             FROM a
+															 inner join eiw_prd.SERVICE_WFMS s
+															 on a.ACTVTY_ID = s.ACTVTY_ID
+															 inner join eiw_prd.PREAUTHORIZATION H
+                                                             on s.SVC_ID = h.SVC_ID)B
+                            GROUP BY activityid    )j ),
+							
+							 REFERRAL(ACTIVITYID,SVC_CD, FAC_NM) AS  ( 
+Select	activityid,SVC_CD,FAC_NM  ----Added Facility Name Ticket #Ticket No-426269
+							   from (
+select	a.ACTVTY_ID as activityid,h.SVC_CD,RF.FAC_NM, row_number() over (partition by a.ACTVTY_ID 
+order by h.PREAUTH_ID desc)rnk_id
+							   from  a
+									 INNER JOIN  eiw_prd.service_WFMS s
+									 ON a.ACTVTY_ID = s.ACTVTY_ID
+									  INNER JOIN eiw_prd.PREAUTHORIZATION h
+									  ON s.SVC_ID = h.SVC_ID
+                    right OUTER JOIN eiw_prd.REFERRAL_SERVICE RS
+					on RS.REF_SVC_ID = H.REF_SVC_ID
+                    right OUTER JOIN eiw_prd.REFERRAL_FACILITY RF
+					ON  RS.REF_REQ_ID = RF.REF_REQ_ID				   
+                                                 
+                                                   AND RF.FAC_NM IS NOT NULL
+                                                   ) h 
+where	rnk_id = 1),
+	 PATINTK(ACTIVITYID, JURACSTATE, ERISAIND,FUNDINDCD, FCO_CODE,
+		ASOVALUE, PLANID, COUNTY, GROUPNUMBER, PLAN_NAME
+		) AS (		
+SELECT	A.ACTVTY_ID AS ACTIVITYID,
+                P.JURAC_ST AS JURACSTATE,
+                P.ERISA_FLG AS ERISAIND,
+                P.FUND_IND_CD AS FUNDINDCD,
+                P.CIGNA_FCO_NBR AS FCO_CODE,
+                P.EMPR_ASO_CD AS ASOVALUE,
+				P.PLAN_ID as PLANID
+              , PAT.PAT_CNTY
+			  ,P.INSD_GRP_NBR GROUPNUMBER, PL.PLAN_FULL_DESC AS PLAN_NAME
+           FROM  A
+         
+                INNER JOIN eiw_prd.PATIENT_INTAKE_PLAN P
+                   ON P.PAT_NBR = A.PAT_NBR 
+	and P.PLAN_LVL_CD = 1 
+                      AND P.ITK_ID = A.ITK_ID
+                        INNER JOIN EIW_PRD.PLAN PL ON PL.PLAN_ID=P.PLAN_ID
+            INNER JOIN eiw_prd.PATIENT PAT
+                   ON P.PAT_NBR = PAT.PAT_NBR
+     ),
+  A (ACTVTY_ID , PAT_NBR , ITK_ID, EARLIEST_SOC_TS,PAT_FIRST_NM,
+		PAT_LAST_NM, A_CRTD_TS, ACTVTY_STAT_ID, ACTVTY_CLSD_USER_ID,
+ESCALATION_DUE_TS, ACTVTY_SRC_ID,  ACTVTY_TYPE_ID, PLAN_ID, CRTD_USER_ID,
+		ACTVTY_ST_ID,ROUTG_POINT_ID, ROUTG_POINT_FUP_TS, ROUTG_POINT_PROCG_DL_TS,
+		
+ROUTG_POINT_CLSD_TS, RP_CRTD_TS, ASSGND_USER_ID, WRKD_USER_ID,
+		 LAST_ACSS_USER_ID, ROUTG_POINT_OPEN_IND, ROUTG_POINT_STAT_ID,
+ROUTG_POINT_QUEUE_ID, ROUTG_POINT_RSN_ID, ROUTG_PRI_ID, PAT_DOB ) AS (
+SELECT	 A.ACTVTY_ID , A.PAT_NBR , A.ITK_ID, A.EARLIEST_SOC_TS,
+		A.PAT_FIRST_NM, A.PAT_LAST_NM, A.CRTD_TS, A.ACTVTY_STAT_ID, A.ACTVTY_CLSD_USER_ID,
+A.ESCALATION_DUE_TS, A.ACTVTY_SRC_ID,  A.ACTVTY_TYPE_ID, A.PLAN_ID,
+		A.CRTD_USER_ID,A.ACTVTY_ST_ID, RP.ROUTG_POINT_ID, RP.ROUTG_POINT_FUP_TS,
+		RP.ROUTG_POINT_PROCG_DL_TS, 
+RP.ROUTG_POINT_CLSD_TS, RP.CRTD_TS, RP.ASSGND_USER_ID, RP.WRKD_USER_ID,
+		 RP.LAST_ACSS_USER_ID, RP.ROUTG_POINT_OPEN_IND, RP.ROUTG_POINT_STAT_ID,
+RP.ROUTG_POINT_QUEUE_ID, RP.ROUTG_POINT_RSN_ID, RP.ROUTG_PRI_ID , A.PAT_DOB
+FROM	eiw_prd.ACTIVITY A
+                        INNER JOIN eiw_prd.ACTIVITY_ROUTING_POINT RP
+                           ON A.ACTVTY_ID = RP.ROUTG_POINT_ACTVTY_ID
+                           WHERE RP.ROUTG_POINT_OPEN_IND = 0
+                     AND  --CAST(CAST(RP.ROUTG_POINT_CLSD_TS AS TIMESTAMP(6)) + (EXTRACT(TIMEZONE_HOUR FROM CURRENT_TIMESTAMP) * INTERVAL '1' HOUR)  AS TIMESTAMP(6))  
+					  RP.ROUTG_POINT_CLSD_TS+CAST( EXTRACT( TIMEZONE_HOUR FROM (Cast (CAST (RP.ROUTG_POINT_CLSD_TS as varchar(19)) as Timestamp(0) with TIME ZONE ))) AS INTERVAL HOUR)
+				BETWEEN  TO_DATE(TO_CHAR(?,'MM/DD/YYYY'),'MM/DD/YYYY') 
+	AND TO_DATE(TO_CHAR(?,'MM/DD/YYYY'),'MM/DD/YYYY'))
+				
+		           SELECT OPCENTER AS OPERATION_CENTER,
+               ACTIVITYSTATUS AS ACTIVITY_STATUS,
+               ACTIVITYTYPE AS ACTIVITY_TYPE,
+               "SOURCE" AS SOURCE,
+                --CAST(CAST(ACTCREATED AS TIMESTAMP(6)) + (EXTRACT(TIMEZONE_HOUR FROM CURRENT_TIMESTAMP) * INTERVAL '1' HOUR)  AS TIMESTAMP(6)) 
+				 ACTCREATED+CAST( EXTRACT( TIMEZONE_HOUR FROM (Cast (CAST (ACTCREATED as varchar(19)) as Timestamp(0) with TIME ZONE ))) AS INTERVAL HOUR)
+                 AS ACTIVITY_CREATE_DATE_LOCAL,
+               ACTCREATED AS ACTIVITY_CREATE_DATE_UTC,
+               PLAN AS CARRIER,
+               QUEUETYPE AS QUEUE_TYPE,
+               "QUEUE" AS QUEUE_NAME,
+               ROUTING_REASON AS ROUTE_REASON,
+               RP_STATUS_DESCRIPTION AS ROUTE_STATUS,
+               INTAKEID AS INTAKE_ID,
+               LAST_NAME,
+                FIRST_NAME,
+               STATE AS STATE,
+             -- CAST(CAST(EARLIESTSOCDATE AS TIMESTAMP(6)) + (EXTRACT(TIMEZONE_HOUR FROM CURRENT_TIMESTAMP) * INTERVAL '1' HOUR)  AS TIMESTAMP(6)) 
+			  EARLIESTSOCDATE+CAST( EXTRACT( TIMEZONE_HOUR FROM (Cast (CAST (EARLIESTSOCDATE as varchar(19)) as Timestamp(0) with TIME ZONE ))) AS INTERVAL HOUR)
+                 AS EARLIEST_SOC_DATE_LOCAL,
+               EARLIESTSOCDATE AS EARLIEST_OC_DATE_UTC,
+  --CAST(CAST(CREATEDATE AS TIMESTAMP(6)) + (EXTRACT(TIMEZONE_HOUR FROM CURRENT_TIMESTAMP) * INTERVAL '1' HOUR)  AS TIMESTAMP(6))  
+  CREATEDATE+CAST( EXTRACT( TIMEZONE_HOUR FROM (Cast (CAST (CREATEDATE as varchar(19)) as Timestamp(0) with TIME ZONE ))) AS INTERVAL HOUR) AS ROUTE_OPEN_DATE_LOCAL,
+               CREATEDATE AS ROUTE_OPEN_DATE_UTC,
+             --   CAST(CAST(CLOSEDATE AS TIMESTAMP(6)) + (EXTRACT(TIMEZONE_HOUR FROM CURRENT_TIMESTAMP) * INTERVAL '1' HOUR)  AS TIMESTAMP(6)) 
+				CLOSEDATE+CAST( EXTRACT( TIMEZONE_HOUR FROM (Cast (CAST (CLOSEDATE as varchar(19)) as Timestamp(0) with TIME ZONE ))) AS INTERVAL HOUR)AS ROUTE_CLOSE_DATE_LOCAL,
+               CLOSEDATE AS ROUTE_CLOSE_DATE_UTC,
+               SYSTEMID AS LOCAL_TIME_ZONE,
+               CUSERNAME AS CREATED_BY,
+               ASSIGNED_TO_USER AS ASSIGNED_TO,
+               CLOSED_BY_USER AS CLOSED_BY,
+               LASTACCESSUSER AS LAST_ACCESSED_BY,
+               FOLLOWUPDATE AS FOLLOW_UP_DATE,
+               NULL AS ROUTE_PROCESS_TIME,
+               NULL AS WARNING_STATUS,
+               NULL AS PROCESS_TIME_MET,
+               NULL AS EXCEEDED_PD,
+           ROUTINGPRIORITY ROUTING_PRIORITY,
+               PROVNAMES PROVIDER_NAMES,
+               -- ADDED BY RAM (11/25)
+               HCPC_CODES HCPC_CODES,
+               JURACSTATE JURACSTATE,
+               ERISAIND ERISA,
+               FUNDINDCD FUNDIND,
+               ASOVALUE FUNDSOURCE,
+               PLANID,
+               CARR_ID CAR_ID,
+              FCO_CODE,
+             COUNTY,
+               REVIEW_TYPE,
+               REFERRAL_TYPE,
+               /* NEW COLUMNS ADDED AS PART OF TICKET 397763*/
+              ESCALATION_FLAG AS ALERT,
+              ESCALATION_TYPE,
+               DUE_DATE,
+              ESCALATION_REASON,
+               CLAIM_ID,
+              cast(random(0,999999999) as DECIMAL(18,6))/1000000000 (format '9.999999999') as RANDOM_NUMBERS,
+    NAME AS FCO_DESCRIPTION,
+     Servicecode
+,FACILITY_NAME, GROUPNUMBER, PAT_DOB,PLAN_NAME
+          FROM(
+
+SELECT UNIQUE
+                               A.ROUTG_POINT_ID AS RPID,
+                               PLAN.CARR_BUS_SGMT_ID AS PLANID,
+							  
+                               A.ROUTG_POINT_FUP_TS AS FOLLOWUPDATE,
+                               COALESCE (A.ROUTG_POINT_PROCG_DL_TS,
+                                    A.EARLIEST_SOC_TS)
+                                  AS PROCESSINGDEADLINEDATE,
+                               Q.OP_CTR_CD AS OPCENTER,
+                               ACTS.CD_DESC AS ACTIVITYSTATUS,
+                               ACT.ACTVTY_TYPE_DESC AS ACTIVITYTYPE,
+                              SRC.CD_DESC AS "SOURCE",
+                               A.ACTVTY_ID,
+                               A.A_CRTD_TS AS ACTCREATED,
+                               A.EARLIEST_SOC_TS AS EARLIESTSOCDATE,
+		STATE.ST AS STATE,
+                               QT.CD_DESC AS QUEUETYPE,
+                               A.ITK_ID AS INTAKEID,
+                               A.PAT_LAST_NM AS LAST_NAME,
+                               A.PAT_FIRST_NM AS FIRST_NAME,
+                               Q.QUEUE_DESC AS "QUEUE",
+                               PLAN.CARR_BUS_SGMT_DESC AS PLAN,
+							   CAST(CURRENT_TIMESTAMP  - (EXTRACT(TIMEZONE_HOUR FROM CURRENT_TIMESTAMP) * INTERVAL '1' HOUR) AS TIMESTAMP(6)) AS UTC_TIME,
+                              CASE
+                                 WHEN (A.ROUTG_POINT_CLSD_TS IS NULL
+                                        AND COALESCE (A.ROUTG_POINT_PROCG_DL_TS,
+                                                 A.EARLIEST_SOC_TS) <
+                                         UTC_TIME)
+                                  THEN
+                                     '0'
+                                  WHEN (A.ROUTG_POINT_CLSD_TS IS NULL
+                                        AND COALESCE (A.ROUTG_POINT_PROCG_DL_TS,
+                                                 A.EARLIEST_SOC_TS) >=
+                                         UTC_TIME)
+                                  THEN
+                                     NULL
+                                  WHEN COALESCE (A.ROUTG_POINT_PROCG_DL_TS,
+                                            A.EARLIEST_SOC_TS) >=
+                                          A.ROUTG_POINT_CLSD_TS
+                                  THEN
+                                     '1'
+                                  WHEN COALESCE (A.ROUTG_POINT_PROCG_DL_TS,
+                                            A.EARLIEST_SOC_TS) < A.ROUTG_POINT_CLSD_TS
+                                  THEN
+                                     '0'
+                                  ELSE
+                                     NULL
+                               END
+                                  AS PROCESSPASSED,
+                         
+	RT.ROUTG_POINT_STAT_DESC
+                                  
+                                  RP_STATUS_DESCRIPTION,
+                               A.RP_CRTD_TS AS CREATEDATE,
+                               ROUTING_REASON.ROUTG_RSN_DESC AS ROUTING_REASON,
+                              (
+SELECT	E1.DOM_USER
+                                  FROM eiw_prd.EBIN_USER E1
+                                 WHERE E1.EBIN_USER_ID = A.ASSGND_USER_ID)
+                                  ASSIGNED_BY_USER,
+                               (
+SELECT	E1.DOM_USER
+                                  FROM eiw_prd.EBIN_USER E1
+                                 WHERE E1.EBIN_USER_ID = A.WRKD_USER_ID)
+                                  ASSIGNED_TO_USER,
+                               DECODE (
+                                  
+	A.ACTVTY_STAT_ID
+                                     
+                                ,
+                                  3, (
+SELECT	U2.DOM_USER
+                                        FROM eiw_prd.EBIN_USER U2
+                                       WHERE U2.EBIN_USER_ID = A.ACTVTY_CLSD_USER_ID
+                                             AND A.ROUTG_POINT_OPEN_IND = 0),
+                                  (
+SELECT	U2.DOM_USER
+                                     FROM eiw_prd.EBIN_USER U2
+                                    WHERE U2.EBIN_USER_ID = A.WRKD_USER_ID
+                                          AND A.ROUTG_POINT_OPEN_IND = 0))
+                                  CLOSED_BY_USER,
+                               (
+SELECT	LAU.DOM_USER
+                                  FROM eiw_prd.EBIN_USER LAU
+                                 WHERE LAU.EBIN_USER_ID = A.LAST_ACSS_USER_ID)
+                                  LASTACCESSUSER,
+                               A.ROUTG_POINT_CLSD_TS AS CLOSEDATE,
+                           CASE 
+	WHEN TZU.TMZN_ID = 1 THEN 'America/New_York'
+							   WHEN TZU.TMZN_ID = 2 THEN 'America/Indianapolis'
+							   WHEN TZU.TMZN_ID = 3 THEN 'America/Chicago'
+							   WHEN TZU.TMZN_ID =4 THEN 'America/Denver'
+							   WHEN TZU.TMZN_ID = 5 THEN 'America/Phoenix'
+							   WHEN TZU.TMZN_ID = 6 THEN 'America/Los_Angeles'  
+END	AS SYSTEMID,
+                               CBU.DOM_USER AS CUSERNAME,
+                               RPRT.CD_DESC ROUTINGPRIORITY,
+                               H.PROVNAMES,
+                               H.HCPC_CODES ,
+                               P.JURACSTATE,
+                               P.ERISAIND,
+                               P.FUNDINDCD,
+                               P.ASOVALUE,
+                               P.FCO_CODE,
+                               PLAN.CARR_ID,
+                            P.COUNTY,
+                               H.REFERRAL_TYPE,
+                               H.REVIEW_TYPE,
+                                         
+                               /* NEW COLUMNS ADDTION AS PART OF 397763*/
+                          ED.ESCALATION_LVL_CD AS ESCALATION_FLAG,
+                             ETYPE.CD_DESC  AS ESCALATION_TYPE,
+                               ER.ESCALATION_RSN_DESC AS ESCALATION_REASON,
+                                A.ESCALATION_DUE_TS AS DUE_DATE,
+                               CACT.CLM_ID AS CLAIM_ID,
+                            CIGFCO.FCO_NM AS  "NAME",
+                               RE.SVC_CD as Servicecode,
+                 RE.FAC_NM AS FACILITY_NAME, P.GROUPNUMBER, A.PAT_DOB, P.PLAN_NAME
+                          FROM  A
+                               
+
+                                  
+                            INNER JOIN eiw_prd.CODE  SRC
+                                  ON A.ACTVTY_SRC_ID = CAST(SRC.CD_VAL_TXT AS DECIMAL(18,
+		0)) 
+	AND SRC.CODESET_NM = 'ACTVTY_SRC'
+                               INNER JOIN eiw_prd.CARRIER_BUSINESS_SEGMENT PLAN
+                                  ON A.PLAN_ID = PLAN.CARR_BUS_SGMT_ID 
+
+								   
+                               INNER JOIN eiw_prd.ACTIVITY_TYPE ACT
+                                  ON A.ACTVTY_TYPE_ID = ACT.ACTVTY_TYPE_ID
+                               INNER JOIN eiw_prd.ROUTING_POINT_STATUS RT
+                                  ON A.ROUTG_POINT_STAT_ID =
+                                        RT.ROUTG_POINT_STAT_ID
+                               INNER JOIN eiw_prd.WORKFLOW_QUEUE Q
+                                  ON A.ROUTG_POINT_QUEUE_ID = Q.QUEUE_ID
+                               INNER JOIN eiw_prd.CODE SITE
+                                  ON Q.SITE_CD = SITE.CD_VAL_TXT 
+	AND SITE.CODESET_NM = 'SITE'
+                               INNER JOIN eiw_prd.CODE  QT
+							   ON Q.QUEUE_TYPE_CD = QT.CD_VAL_TXT 
+	AND QT.CODESET_NM = 'QUEUE_TYPE'  
+                               INNER JOIN eiw_prd.EBIN_USER TZU
+                                  ON A.CRTD_USER_ID = TZU.EBIN_USER_ID
+                            /*  INNER JOIN eiw_prd.CODE  TZ
+                                  ON TZU.TMZN_ID = CAST(TZ.CD_VAL_TXT AS DECIMAL(18,0)) AND TZ.CODESET_NM = 'TMZN'*/
+                           INNER JOIN eiw_prd.CODE  ACTS
+                                  ON A.ACTVTY_STAT_ID = CAST(ACTS.CD_VAL_TXT AS DECIMAL(18,
+		0)) 
+	AND ACTS.CODESET_NM = 'ACTVTY_STAT'
+                               INNER JOIN eiw_prd.EBIN_USER CBU
+                                  ON A.CRTD_USER_ID = CBU.EBIN_USER_ID
+                               LEFT JOIN eiw_prd.SERVICE_WFMS SE
+                                  ON SE.ACTVTY_ID = A.ACTVTY_ID
+                             /*  LEFT JOIN eiw_prd.SERVICE_DESCRIPTION SD
+                                  ON SE.SVC_DESC_ID = SD.SVC_DESC_ID
+                               LEFT JOIN eiw_prd.XPND_SVC_TYPE ST
+                                  ON SD.SVC_TYPE_ID = CAST(ST.SVC_TYPE_CD AS DECIMAL(18,0))*/
+                             INNER JOIN eiw_prd.STATE
+                                  ON A.ACTVTY_ST_ID = CAST(eiw_prd.STATE.ST_ID AS DECIMAL(18,
+		0))
+                               INNER JOIN eiw_prd.ROUTING_REASON
+                                  ON A.ROUTG_POINT_RSN_ID = ROUTING_REASON.ROUTG_RSN_ID
+                               LEFT JOIN eiw_prd.START_OF_CARE SOC
+                                  ON SE.SOC_ID = SOC.SOC_ID
+                               LEFT JOIN eiw_prd.CODE RPRT 
+                                  ON A.ROUTG_PRI_ID = CAST(RPRT.CD_VAL_TXT AS DECIMAL(18,
+		0)) 
+	AND RPRT.CODESET_NM = 'ROUTG_PRI'
+								      LEFT JOIN eiw_prd.ESCALATION_CALL ED
+                                  ON ED.ACTVTY_ID = A.ACTVTY_ID
+                               LEFT JOIN eiw_prd.ESCALATION_REASON ER
+                                  ON ED.ESCALATION_RSN_ID =
+                                        ER.ESCALATION_RSN_ID
+                               LEFT JOIN eiw_prd.CODE  ETYPE
+                                  ON ER.ESCALATION_TYPE_CD =ETYPE.CD_VAL_TXT 
+	AND ETYPE.CODESET_NM = 'ESCALATION_TYPE'
+                               LEFT JOIN eiw_prd.CLAIM_ACTIVITY CACT
+                                  ON CACT.CLM_ACTVTY_ID = A.ACTVTY_ID
+                            LEFT OUTER JOIN SVC_HCPC H
+                                  ON A.ACTVTY_ID = H.ID
+                               LEFT OUTER JOIN PATINTK P
+                                  ON A.ACTVTY_ID = P.ACTIVITYID
+                                  LEFT JOIN REFERRAL RE
+                                  ON A.ACTVTY_ID = RE.ACTIVITYID 
+                                   LEFT JOIN eiw_prd.CARRIER CAR
+          ON CAR.CARR_ID = PLAN.CARR_ID
+						LEFT OUTER JOIN eiw_prd.CIGNA_FCO CIGFCO
+          ON P.FCO_CODE = CAST(CIGFCO.CIGNA_FCO_NBR AS CHAR(3))
+             AND CIGFCO.CARR_ID = PLAN.CARR_ID
+			 		WHERE QT.CD_VAL_TXT in(?)
+			AND PLAN.CARR_BUS_SGMT_ID IN (?)
+		
+			
+                             )B
+           WHERE ASSIGNED_TO IS NOT NULL
+                      AND CLOSED_BY IS NOT NULL                              
